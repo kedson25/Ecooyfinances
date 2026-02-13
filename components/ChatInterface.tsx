@@ -1,0 +1,3 @@
+
+// Componente removido
+export {};
