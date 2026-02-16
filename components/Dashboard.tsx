@@ -51,58 +51,6 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, addToast, theme, 
   const [customGoalCategory, setCustomGoalCategory] = useState('');
   const [presetGoalChoice, setPresetGoalChoice] = useState('Geral');
 
-  // Monitoramento de Alertas (Metas Próximas e Salário)
-  useEffect(() => {
-    if (goals.length === 0 && !fullUserData) return;
-
-    const newAlerts: AppNotification[] = [];
-    const now = new Date();
-
-    goals.forEach(goal => {
-      if (goal.deadline) {
-        const deadlineDate = new Date(goal.deadline);
-        const diffTime = deadlineDate.getTime() - now.getTime();
-        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-        if (diffDays <= 7 && diffDays >= 0) {
-          const alertId = `goal-${goal.id}-${deadlineDate.toDateString()}`;
-          if (!notifications.some(n => n.id === alertId)) {
-            newAlerts.push({
-              id: alertId,
-              type: 'goal',
-              title: 'Meta Próxima!',
-              message: `O prazo para "${goal.name}" vence em ${diffDays} dias.`,
-              date: new Date(),
-              isRead: false
-            });
-          }
-        }
-      }
-    });
-
-    if (fullUserData?.salaryDay) {
-      const currentDay = now.getDate();
-      if (currentDay === fullUserData.salaryDay - 1) {
-        const salaryAlertId = `salary-${now.getMonth()}-${now.getFullYear()}`;
-        if (!notifications.some(n => n.id === salaryAlertId)) {
-          newAlerts.push({
-            id: salaryAlertId,
-            type: 'payment',
-            title: 'Lembrete de Salário',
-            message: 'Seu salário cai amanhã! Lembre-se de organizar seus aportes.',
-            date: new Date(),
-            isRead: false
-          });
-        }
-      }
-    }
-
-    if (newAlerts.length > 0) {
-      setNotifications(prev => [...newAlerts, ...prev]);
-      newAlerts.forEach(a => notificationService.sendNotification(a.title, { body: a.message }));
-    }
-  }, [goals, fullUserData]);
-
   useEffect(() => {
     const timer = setTimeout(() => setIsSummaryLoading(false), 1500);
     return () => clearTimeout(timer);
@@ -112,18 +60,15 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, addToast, theme, 
     const now = new Date();
     let year = now.getFullYear();
     let month = now.getMonth();
-    const day = now.getDate();
-    if (day < 30) { month -= 1; if (month < 0) { month = 11; year -= 1; } }
-    return new Date(year, month, 30, 0, 0, 0);
+    if (now.getDate() < 30) { month -= 1; if (month < 0) { month = 11; year -= 1; } }
+    return new Date(year, month, 30);
   }, []);
 
   useEffect(() => {
     const fetchUserData = async () => {
       const userRef = doc(db, "finances", user.uid);
       const userSnap = await getDoc(userRef);
-      if (userSnap.exists()) {
-        setFullUserData(userSnap.data() as UserProfile);
-      }
+      if (userSnap.exists()) setFullUserData(userSnap.data() as UserProfile);
     };
     fetchUserData();
   }, [user.uid]);
@@ -134,13 +79,12 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, addToast, theme, 
       const txs: Transaction[] = [];
       snapshot.forEach((doc) => {
         const data = doc.data();
-        const txTimestamp = data.timestamp instanceof Timestamp ? data.timestamp.toDate() : new Date();
-        if (txTimestamp >= billingCycleStart) txs.push({ id: doc.id, ...data } as Transaction);
+        txs.push({ id: doc.id, ...data } as Transaction);
       });
       setTransactions(txs.sort((a, b) => (b.timestamp?.toMillis?.() || 0) - (a.timestamp?.toMillis?.() || 0)));
     });
     return () => unsubscribe();
-  }, [user.uid, billingCycleStart]);
+  }, [user.uid]);
 
   useEffect(() => {
     const q = query(collection(db, "goals"), where("uid", "==", user.uid));
@@ -162,15 +106,24 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, addToast, theme, 
   }, [transactions]);
 
   const handleTransactionDelete = async (id: string, e?: React.MouseEvent) => {
-    if (e) e.stopPropagation();
-    if (!confirm("Deseja realmente excluir este registro?")) return;
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    
+    const confirmDelete = window.confirm("Deseja realmente excluir este registro permanentemente?");
+    if (!confirmDelete) return;
+
     try {
       await deleteDoc(doc(db, "transactions", id));
-      addToast("Transação excluída!", "success");
-      setIsTxModalOpen(false);
-      setEditingTransaction(null);
-    } catch (e) {
-      addToast("Erro ao excluir.", "error");
+      addToast("Registro excluído com sucesso!", "success");
+      if (isTxModalOpen) {
+        setIsTxModalOpen(false);
+        setEditingTransaction(null);
+      }
+    } catch (err) {
+      console.error("Erro ao deletar:", err);
+      addToast("Erro ao excluir registro no banco de dados.", "error");
     }
   };
 
@@ -233,65 +186,22 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, addToast, theme, 
     return '***';
   };
 
-  const markNotifAsRead = (id: string) => {
-    setNotifications(prev => prev.map(n => n.id === id ? { ...n, isRead: true } : n));
-  };
-
-  const unreadNotifCount = notifications.filter(n => !n.isRead).length;
-
   const containerVariants = { hidden: { opacity: 0, y: 10 }, visible: { opacity: 1, y: 0, transition: { duration: 0.4 } } };
 
   return (
     <div className="min-h-screen flex flex-col pb-32 transition-colors duration-300">
       <header className="glass sticky top-0 z-40 px-4 sm:px-8 py-5 flex items-center justify-between border-b border-slate-100 dark:border-slate-800 transition-all">
         <div className="flex items-center gap-4">
-          <div className="w-12 h-12 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-lg text-white">
-            <i className="fa-solid fa-leaf text-xl"></i>
-          </div>
+          <div className="w-12 h-12 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-lg text-white"><i className="fa-solid fa-leaf text-xl"></i></div>
           <div>
             <h2 className="font-extrabold text-xl text-slate-800 dark:text-slate-100 leading-none">Ecooy</h2>
             <span className="text-[10px] font-bold text-indigo-500 uppercase tracking-widest">{user.displayName || 'Bem-vindo'}</span>
           </div>
         </div>
         <div className="flex items-center gap-2 sm:gap-4">
-           <div className="relative">
-             <button 
-               onClick={() => { setShowNotifications(!showNotifications); notificationService.requestPermission(); }} 
-               className="w-10 h-10 rounded-full flex items-center justify-center text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors relative"
-             >
-               <i className="fa-solid fa-bell"></i>
-               {unreadNotifCount > 0 && <span className="absolute top-2 right-2 w-4 h-4 bg-rose-500 text-[9px] font-black text-white rounded-full flex items-center justify-center border-2 border-white dark:border-slate-900">{unreadNotifCount}</span>}
-             </button>
-             <AnimatePresence>
-               {showNotifications && (
-                 <motion.div initial={{ opacity: 0, y: 10, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 10, scale: 0.95 }} className="absolute top-12 right-0 w-80 max-h-[400px] overflow-y-auto bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-100 dark:border-slate-800 p-4 z-50 scrollbar-hide">
-                   <div className="flex justify-between items-center mb-4 px-2">
-                     <h4 className="font-black text-xs uppercase tracking-widest">Alertas</h4>
-                     <button onClick={() => setNotifications(n => n.map(x => ({...x, isRead: true})))} className="text-[9px] font-black text-indigo-600 uppercase">Marcar todas</button>
-                   </div>
-                   <div className="space-y-2">
-                     {notifications.length === 0 ? <p className="text-center py-8 text-slate-400 text-xs font-bold">Sem alertas novos.</p> : notifications.map(notif => (
-                       <div key={notif.id} onClick={() => markNotifAsRead(notif.id)} className={`p-4 rounded-2xl border transition-all cursor-pointer ${notif.isRead ? 'bg-slate-50 dark:bg-slate-800/50 border-transparent' : 'bg-white dark:bg-slate-800 border-indigo-100 dark:border-indigo-900 shadow-sm'}`}>
-                         <div className="flex gap-3">
-                           <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${notif.type === 'goal' ? 'bg-sky-50 text-sky-500' : 'bg-orange-50 text-orange-500'}`}><i className={`fa-solid ${notif.type === 'goal' ? 'fa-bullseye' : 'fa-calendar-day'} text-xs`}></i></div>
-                           <div><p className="font-black text-xs mb-0.5">{notif.title}</p><p className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">{notif.message}</p></div>
-                         </div>
-                       </div>
-                     ))}
-                   </div>
-                 </motion.div>
-               )}
-             </AnimatePresence>
-           </div>
-           <button onClick={() => setShowBalances(!showBalances)} className="w-10 h-10 rounded-full flex items-center justify-center text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
-             <i className={`fa-solid ${showBalances ? 'fa-eye' : 'fa-eye-slash'}`}></i>
-           </button>
-           <button onClick={toggleTheme} className="w-10 h-10 rounded-full flex items-center justify-center text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
-             <i className={`fa-solid ${theme === 'light' ? 'fa-moon' : 'fa-sun'}`}></i>
-           </button>
-           <button onClick={onLogout} className="w-10 h-10 rounded-full flex items-center justify-center text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/20 transition-colors">
-             <i className="fa-solid fa-right-from-bracket"></i>
-           </button>
+           <button onClick={() => setShowBalances(!showBalances)} className="w-10 h-10 rounded-full flex items-center justify-center text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"><i className={`fa-solid ${showBalances ? 'fa-eye' : 'fa-eye-slash'}`}></i></button>
+           <button onClick={toggleTheme} className="w-10 h-10 rounded-full flex items-center justify-center text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"><i className={`fa-solid ${theme === 'light' ? 'fa-moon' : 'fa-sun'}`}></i></button>
+           <button onClick={onLogout} className="w-10 h-10 rounded-full flex items-center justify-center text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/20 transition-colors"><i className="fa-solid fa-right-from-bracket"></i></button>
         </div>
       </header>
 
@@ -312,18 +222,21 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, addToast, theme, 
                   </div>
                 </div>
               </motion.div>
-
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                 <div className="bg-white dark:bg-slate-900 p-8 rounded-[3rem] border border-slate-100 dark:border-slate-800 shadow-sm">
-                  <div className="flex justify-between items-center mb-6"><h3 className="font-black text-xl text-slate-800 dark:text-slate-100">Transações Recentes</h3><button onClick={() => setActiveTab('transactions')} className="text-indigo-600 font-black text-xs uppercase tracking-widest">Ver tudo</button></div>
+                  <div className="flex justify-between items-center mb-6"><h3 className="font-black text-xl text-slate-800 dark:text-slate-100">Recentes</h3><button onClick={() => setActiveTab('transactions')} className="text-indigo-600 font-black text-xs uppercase tracking-widest">Ver tudo</button></div>
                   <div className="space-y-2">
                     {transactions.slice(0, 5).map(tx => (
                       <div key={tx.id} onClick={() => { setEditingTransaction(tx); setIsTxModalOpen(true); }} className="flex items-center justify-between p-4 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-2xl cursor-pointer transition-all border border-transparent hover:border-slate-100 group">
                         <div className="flex items-center gap-4 flex-1 overflow-hidden">
                           <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${tx.type === 'income' ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}><i className={`fa-solid ${tx.type === 'income' ? 'fa-arrow-up' : 'fa-arrow-down'} text-[10px]`}></i></div>
-                          <div className="flex-1 min-w-0"><p className="text-sm font-black mb-0.5 truncate text-slate-700 dark:text-slate-200">{tx.description}</p><p className="text-[9px] text-slate-400 font-bold uppercase">{tx.category}</p><p className={`font-black text-sm mt-1 ${tx.type === 'income' ? 'text-emerald-500' : 'text-slate-700 dark:text-slate-300'}`}>R$ {maskValue(tx.amount)}</p></div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-black text-slate-700 dark:text-slate-200 leading-tight">{tx.description}</p>
+                            <p className={`font-black text-sm mt-1 mb-0.5 ${tx.type === 'income' ? 'text-emerald-500' : 'text-slate-700 dark:text-slate-300'}`}>R$ {maskValue(tx.amount)}</p>
+                            <p className="text-[9px] text-slate-400 font-bold uppercase tracking-wider">{tx.category}</p>
+                          </div>
                         </div>
-                        <button onClick={(e) => handleTransactionDelete(tx.id, e)} className="w-10 h-10 rounded-full flex items-center justify-center text-slate-300 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/20 opacity-0 group-hover:opacity-100 transition-all shrink-0"><i className="fa-solid fa-trash-can text-sm"></i></button>
+                        <button onClick={(e) => handleTransactionDelete(tx.id, e)} className="w-10 h-10 rounded-full flex items-center justify-center text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/20 transition-all shrink-0 z-10"><i className="fa-solid fa-trash-can text-sm"></i></button>
                       </div>
                     ))}
                   </div>
@@ -357,9 +270,13 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, addToast, theme, 
                   <div key={tx.id} onClick={() => { setEditingTransaction(tx); setIsTxModalOpen(true); }} className="bg-white dark:bg-slate-900 p-6 rounded-[2.5rem] border border-slate-100 dark:border-slate-800 flex justify-between items-center cursor-pointer hover:border-indigo-200 transition-all group">
                     <div className="flex items-center gap-5 flex-1 overflow-hidden">
                       <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-xl shrink-0 ${tx.type === 'income' ? 'bg-emerald-50 text-emerald-500' : 'bg-rose-50 text-rose-500'}`}><i className={`fa-solid ${tx.type === 'income' ? 'fa-plus' : 'fa-minus'}`}></i></div>
-                      <div className="flex-1 min-w-0"><p className="font-black text-lg leading-tight mb-1 truncate text-slate-700 dark:text-slate-200">{tx.description}</p><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">{tx.category} • {tx.date}</p><p className={`font-black text-xl leading-none ${tx.type === 'income' ? 'text-emerald-500' : 'text-slate-800 dark:text-slate-100'}`}>R$ {maskValue(tx.amount)}</p></div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-black text-lg leading-tight text-slate-700 dark:text-slate-200 break-words">{tx.description}</p>
+                        <p className={`font-black text-xl leading-none mt-2 mb-1.5 ${tx.type === 'income' ? 'text-emerald-500' : 'text-slate-800 dark:text-slate-100'}`}>R$ {maskValue(tx.amount)}</p>
+                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{tx.category} • {tx.date}</p>
+                      </div>
                     </div>
-                    <button onClick={(e) => handleTransactionDelete(tx.id, e)} className="w-12 h-12 rounded-2xl flex items-center justify-center text-slate-300 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/20 opacity-0 group-hover:opacity-100 transition-all shrink-0 ml-2"><i className="fa-solid fa-trash-can"></i></button>
+                    <button onClick={(e) => handleTransactionDelete(tx.id, e)} className="w-12 h-12 rounded-2xl flex items-center justify-center text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/20 transition-all shrink-0 ml-2 z-10"><i className="fa-solid fa-trash-can"></i></button>
                   </div>
                 ))}
               </div>
@@ -378,7 +295,7 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, addToast, theme, 
                             <div className="w-14 h-14 bg-indigo-50 dark:bg-indigo-900/30 rounded-2xl flex items-center justify-center text-indigo-600"><i className="fa-solid fa-bullseye text-xl"></i></div>
                             <div className="flex gap-2">
                               <button onClick={() => { setEditingGoal(goal); setIsGoalModalOpen(true); }} className="w-9 h-9 flex items-center justify-center rounded-full bg-slate-50 dark:bg-slate-800 text-slate-400 hover:text-indigo-600 transition-colors"><i className="fa-solid fa-pen text-xs"></i></button>
-                              <button onClick={() => deleteDoc(doc(db, "goals", goal.id))} className="w-9 h-9 flex items-center justify-center rounded-full bg-slate-50 dark:bg-slate-800 text-slate-400 hover:text-rose-500 transition-colors"><i className="fa-solid fa-trash-can text-xs"></i></button>
+                              <button onClick={() => { if(window.confirm("Deseja realmente excluir esta meta?")) deleteDoc(doc(db, "goals", goal.id)) }} className="w-9 h-9 flex items-center justify-center rounded-full bg-slate-50 dark:bg-slate-800 text-slate-400 hover:text-rose-500 transition-colors"><i className="fa-solid fa-trash-can text-xs"></i></button>
                             </div>
                          </div>
                          <div><h3 className="text-2xl font-black tracking-tight text-slate-800 dark:text-slate-100">{goal.name}</h3><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">{goal.category}</p></div>
@@ -429,7 +346,13 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, addToast, theme, 
       <Modal isOpen={isTxModalOpen} onClose={() => { setIsTxModalOpen(false); setEditingTransaction(null); }} title={editingTransaction ? "Editar Registro" : "Nova Movimentação"}>
         <TransactionForm onAdd={handleTransactionSubmit} initialData={editingTransaction || undefined} />
         {editingTransaction && (
-          <button onClick={() => handleTransactionDelete(editingTransaction.id)} className="w-full mt-4 py-4 text-rose-500 font-black text-xs uppercase tracking-widest hover:bg-rose-50 dark:hover:bg-rose-950/20 rounded-2xl transition-all">Excluir Registro Permanente</button>
+          <button 
+            type="button"
+            onClick={(e) => handleTransactionDelete(editingTransaction.id, e)} 
+            className="w-full mt-4 py-4 text-rose-500 font-black text-xs uppercase tracking-widest hover:bg-rose-50 dark:hover:bg-rose-950/20 rounded-2xl transition-all"
+          >
+            Excluir Registro Permanente
+          </button>
         )}
       </Modal>
 
