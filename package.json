@@ -12,7 +12,10 @@
     "firebase": "^12.9.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
-    "framer-motion": "^11.0.0"
+    "framer-motion": "^11.0.0",
+    "@react-native-async-storage/async-storage": "^2.2.0",
+    "react-native": "^0.84.0",
+    "@expo/vector-icons": "^15.0.3"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
